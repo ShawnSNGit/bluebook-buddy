@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """BlueBook Buddy -- finalize a messy pile of legal research into Bluebook-formatted,
-validated appellate-brief citations.
+appellate-brief citations.
 
 Design principles
 -----------------
@@ -649,7 +649,7 @@ def build_report(cites: list[Citation]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Format and validate appellate-brief citations.")
+    ap = argparse.ArgumentParser(description="Format appellate-brief citations.")
     ap.add_argument("input", nargs="?", default="-", help="input file or '-' for stdin")
     ap.add_argument("-o", "--output", help="write formatted text here instead of stdout")
     ap.add_argument("--style", choices=["markdown", "underline", "plain"], default="markdown",

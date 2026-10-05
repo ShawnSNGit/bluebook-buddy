@@ -1,6 +1,6 @@
 # The BlueBook Buddy
 
-**The BlueBook Buddy** is a free, offline, dependency-free Python tool designed to finalize a messy pile of legal research into formatted, validated citations. 
+**The BlueBook Buddy** is a free, offline, dependency-free Python tool designed to finalize a messy pile of legal research into formatted citations. 
 
 Nearly 100% of people who try to format Bluebook citations by themselves unintentionally make mistakes that can get their files struck by courts. This disproportionately harms first-generation students, pro se litigants, and low-income filers who don't have access to expensive citation-checking software or paralegal support.
 
