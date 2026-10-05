@@ -32,7 +32,7 @@ The exit code is `1` if there are any ERRORs (or WARNs if you pass `--strict`), 
 
 ## Customizing Your Buddy (A Step-by-Step Guide)
 
-The BlueBook Buddy is built to be **CUSTOMIZED as a STARTING POINT**. A brief filed in the U.S. Supreme Court has vastly different formatting requirements than an article submitted to an academic law journal. Because this is just a single Python file, you can easily tweak it.
+The BlueBook Buddy is built to be **CUSTOMIZED as a STARTING POINT**. A brief filed in any Supreme Court has vastly different formatting requirements than an article submitted to an academic law journal. Because this is just a single Python file, you can easily tweak it.
 
 Here is how to tailor it in plain English:
 
