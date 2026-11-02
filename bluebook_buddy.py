@@ -10,13 +10,21 @@ Design principles
   and FLAGS everything it cannot verify (missing court, missing year,
   missing pinpoint, WL/Lexis cites, supra, subsequent history, etc.).
 * Ambiguity is a warning, not a guess.
+* Access to Justice (A2J): Includes pro se / in forma pauperis assistance,
+  free legal research links (CourtListener/LII/RECAP), full Spanish-language
+  diagnostics (--lang es), accessibility/screen-reader optimization (--a11y),
+  and spoken citation guides (--pronounce).
 
 Usage
 -----
-    python3 bluebook_bot.py brief.txt                 # formatted text -> stdout, report -> stderr
-    python3 bluebook_bot.py brief.txt -o final.md --toa
-    cat research.txt | python3 bluebook_bot.py - --style underline
-    python3 bluebook_bot.py brief.txt --json          # machine-readable
+    python3 bluebook_buddy.py brief.txt                 # formatted text -> stdout, report -> stderr
+    python3 bluebook_buddy.py brief.txt -o final.md --toa
+    python3 bluebook_buddy.py brief.txt --pro-se        # free research links & pro se guidance
+    python3 bluebook_buddy.py brief.txt --lang es       # informe completo en español
+    python3 bluebook_buddy.py brief.txt --a11y          # screen-reader & accessibility mode
+    python3 bluebook_buddy.py brief.txt --pronounce     # spoken citation pronunciation guide
+    cat research.txt | python3 bluebook_buddy.py - --style underline
+    python3 bluebook_buddy.py brief.txt --json          # machine-readable
 Exit code: 0 clean, 1 if any ERROR (or any WARN with --strict).
 """
 from __future__ import annotations
@@ -27,6 +35,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from datetime import date
+from urllib.parse import quote_plus
 
 OK, FIXED, WARN, ERROR = "OK", "FIXED", "WARN", "ERROR"
 _RANK = {OK: 0, FIXED: 1, WARN: 2, ERROR: 3}
@@ -101,6 +110,154 @@ SIGNALS = {
     "contra": "Contra", "see, e.g.,": "See, e.g.,", "e.g.,": "E.g.,",
 }
 
+SPANISH_SIGNALS = {
+    "véase": "See", "vease": "See",
+    "véase también": "See also", "vease tambien": "See also",
+    "véase en general": "See generally", "vease en general": "See generally",
+    "cf.": "Cf.", "cfr.": "Cf.",
+    "compare": "Compare", "compare con": "Compare",
+    "confróntese con": "Compare", "confrontese con": "Compare",
+    "de acuerdo": "Accord", "acuerdo": "Accord",
+    "pero véase": "But see", "pero vease": "But see",
+    "pero cf.": "But cf.", "pero cfr.": "But cf.",
+    "contra": "Contra",
+    "véase, e.g.,": "See, e.g.,", "vease, e.g.,": "See, e.g.,",
+    "véase, p. ej.,": "See, e.g.,", "vease, p. ej.,": "See, e.g.,",
+    "véase p. ej.,": "See, e.g.,", "vease p. ej.,": "See, e.g.,",
+    "p. ej.,": "E.g.,", "por ejemplo,": "E.g.,",
+}
+
+REPORTER_SPOKEN = {
+    "U.S.": "United States Reports",
+    "S. Ct.": "Supreme Court Reporter",
+    "L. Ed.": "Lawyers' Edition",
+    "L. Ed. 2d": "Lawyers' Edition, Second Series",
+    "F.2d": "Federal Reporter, Second Series",
+    "F.3d": "Federal Reporter, Third Series",
+    "F.4th": "Federal Reporter, Fourth Series",
+    "F. App'x": "Federal Appendix",
+    "F. Supp.": "Federal Supplement",
+    "F. Supp. 2d": "Federal Supplement, Second Series",
+    "F. Supp. 3d": "Federal Supplement, Third Series",
+    "Fed. Cl.": "Federal Claims Reporter",
+    "B.R.": "Bankruptcy Reporter",
+    "A.": "Atlantic Reporter",
+    "A.2d": "Atlantic Reporter, Second Series",
+    "A.3d": "Atlantic Reporter, Third Series",
+    "N.E.": "North Eastern Reporter",
+    "N.E.2d": "North Eastern Reporter, Second Series",
+    "N.E.3d": "North Eastern Reporter, Third Series",
+    "N.W.": "North Western Reporter",
+    "N.W.2d": "North Western Reporter, Second Series",
+    "N.Y.S.": "New York Supplement",
+    "N.Y.S.2d": "New York Supplement, Second Series",
+    "N.Y.S.3d": "New York Supplement, Third Series",
+    "P.": "Pacific Reporter",
+    "P.2d": "Pacific Reporter, Second Series",
+    "P.3d": "Pacific Reporter, Third Series",
+    "S.E.": "South Eastern Reporter",
+    "S.E.2d": "South Eastern Reporter, Second Series",
+    "S.W.": "South Western Reporter",
+    "S.W.2d": "South Western Reporter, Second Series",
+    "S.W.3d": "South Western Reporter, Third Series",
+    "So.": "Southern Reporter",
+    "So. 2d": "Southern Reporter, Second Series",
+    "So. 3d": "Southern Reporter, Third Series",
+    "Cal. Rptr.": "California Reporter",
+    "Cal. Rptr. 2d": "California Reporter, Second Series",
+    "Cal. Rptr. 3d": "California Reporter, Third Series",
+}
+
+COURT_SPOKEN = {
+    "1st Cir.": "First Circuit Court of Appeals",
+    "2d Cir.": "Second Circuit Court of Appeals",
+    "3d Cir.": "Third Circuit Court of Appeals",
+    "4th Cir.": "Fourth Circuit Court of Appeals",
+    "5th Cir.": "Fifth Circuit Court of Appeals",
+    "6th Cir.": "Sixth Circuit Court of Appeals",
+    "7th Cir.": "Seventh Circuit Court of Appeals",
+    "8th Cir.": "Eighth Circuit Court of Appeals",
+    "9th Cir.": "Ninth Circuit Court of Appeals",
+    "10th Cir.": "Tenth Circuit Court of Appeals",
+    "11th Cir.": "Eleventh Circuit Court of Appeals",
+    "D.C. Cir.": "District of Columbia Circuit Court of Appeals",
+    "Fed. Cir.": "Federal Circuit Court of Appeals",
+}
+
+ROMAN_NUMS = {
+    "I": "One", "II": "Two", "III": "Three", "IV": "Four", "V": "Five",
+    "VI": "Six", "VII": "Seven", "VIII": "Eight", "IX": "Nine", "X": "Ten",
+    "XI": "Eleven", "XII": "Twelve", "XIII": "Thirteen", "XIV": "Fourteen",
+    "XV": "Fifteen", "XVI": "Sixteen", "XVII": "Seventeen", "XVIII": "Eighteen",
+    "XIX": "Nineteen", "XX": "Twenty", "XXI": "Twenty-One", "XXII": "Twenty-Two",
+    "XXIV": "Twenty-Four", "XXVI": "Twenty-Six", "XXVII": "Twenty-Seven",
+}
+
+ES_TRANSLATIONS = {
+    "missing court/year parenthetical": "Falta el tribunal y el año entre paréntesis",
+    "no year found in parenthetical": "No se encontró ningún año en el paréntesis",
+    "exact date given; Bluebook uses year only for reporter cites": "Se incluyó la fecha exacta; Bluebook sólo utiliza el año para repertorios oficiales",
+    "year is in the future": "El año está en el futuro",
+    "unexpected text after year in parenthetical": "Texto inesperado tras el año en el paréntesis",
+    "missing circuit for": "Falta el circuito federal de apelaciones para la cita",
+    "missing court/jurisdiction for": "Falta el tribunal o la jurisdicción para la cita",
+    "unrecognized circuit": "Circuito federal no reconocido",
+    "cite U.S. if the case is reported there (Rule 10.3.1)": "Cite 'U.S.' si el caso está publicado allí (Regla 10.3.1)",
+    "no pinpoint; pin cite the specific proposition (Rule 3.2)": "Sin número de página específico (pincite); cite la página exacta de la proposición (Regla 3.2)",
+    "subsequent history follows; verify manually (Rule 10.7)": "Historial procesal posterior detectado; verifique manualmente (Regla 10.7)",
+    "short form; confirm a matching full citation appears earlier in the brief": "Forma corta; confirme que exista una cita completa previa en el escrito",
+    "cite U.S.C., not U.S.C.A./U.S.C.S., unless unofficial code is required (Rule 12.3)": "Cite U.S.C. (no U.S.C.A./U.S.C.S.), salvo que se exija el código no oficial (Regla 12.3)",
+    "no code year given; add edition year/Supp. if your court requires it (Rule 12.3.2)": "No se indicó el año de la edición del código (Regla 12.3.2)",
+    "missing date parenthetical (Rule 14.2)": "Falta el paréntesis con la fecha (Regla 14.2)",
+    "'Ibid.' is not Bluebook form; use 'Id.' (Rule 4.1)": "'Ibid.' no es formato Bluebook; utilice 'Id.' (Regla 4.1)",
+    "'Id.' has no preceding authority": "'Id.' no tiene ninguna autoridad previa a la que referirse",
+    "ALL-CAPS party name converted to title case; verify capitalization": "Nombre de parte en MAYÚSCULAS convertido a tipo título; verifique la capitalización",
+    "pro se court docket reference; standardized format": "Referencia a expediente judicial pro se; formato estandarizado",
+    "Translated Spanish legal signal to Bluebook standard": "Señal legal en español traducida al estándar Bluebook",
+    "Normalized Spanish constitutional reference to standard Bluebook citation": "Referencia constitucional en español normalizada a Bluebook",
+    "Normalized Spanish statutory citation to standard U.S.C.": "Referencia legal en español normalizada a U.S.C.",
+    "Normalized Spanish page indicator ('pág.') to standard comma pinpoint": "Indicador de página en español ('pág.') normalizado a coma estándar",
+    "Westlaw/Lexis cite: confirm docket no., court, and full date": "Cita de Westlaw/Lexis: confirme núm. de expediente, tribunal y fecha completa",
+    "'supra' may not be used for cases, statutes, or rules (Rule 4.2)": "'supra' no debe usarse para casos, estatutos o reglas (Regla 4.2)",
+    "no earlier full citation found for": "No se encontró cita completa previa para",
+}
+
+PRO_SE_EXPLANATIONS = {
+    "missing court/year parenthetical": "Why this matters: Courts require both the deciding court and the year so the judge knows who issued the decision and whether it is binding precedent.",
+    "no pinpoint": "Why this matters: A 'pinpoint' (pincite) tells the judge exactly which page contains your quote or fact. Without it, busy judges may ignore the citation.",
+    "missing circuit": "Why this matters: Federal appellate courts are divided into numbered circuits (1st through 11th, D.C., and Federal). The court must know which circuit decided your case.",
+    "Ibid.": "Why this matters: In American legal writing, 'Ibid.' is forbidden. Always use 'Id.' when citing the authority immediately preceding.",
+    "Westlaw/Lexis": "Why this matters: Paid database citations cost money to look up. Providing the official reporter or public docket number ensures anyone, including low-income filers, can access the case.",
+    "short form": "Why this matters: A short citation (e.g., 'Brown, 347 U.S. at 495') is only allowed if you wrote out the full citation earlier in your document.",
+    "subsequent history": "Why this matters: If a higher court modified, reversed, or affirmed this case, you must include that so the judge knows the decision is still valid law.",
+}
+
+PRO_SE_EXPLANATIONS_ES = {
+    "missing court/year parenthetical": "Por qué es importante: Los tribunales exigen tanto el tribunal sentenciador como el año para saber qué tribunal emitió la decisión y si es un precedente vinculante.",
+    "no pinpoint": "Por qué es importante: Una 'página específica' (pincite) le indica al juez exactamente en qué página está su cita o hecho relevante. Sin ella, el tribunal puede descartar la referencia.",
+    "missing circuit": "Por qué es importante: Los tribunales federales de apelaciones se dividen en circuitos numerados (del 1.º al 11.º, D.C. y Federal). El tribunal necesita saber cuál resolvió el caso.",
+    "Ibid.": "Por qué es importante: En los escritos legales de EE. UU. está prohibido 'Ibid.'. Utilice siempre 'Id.' cuando cite la misma autoridad inmediata anterior.",
+    "Westlaw/Lexis": "Por qué es importante: Las citas de bases de datos de pago requieren suscripciones costosas. Usar el repertorio oficial o el número de expediente público permite que cualquier persona verifique el caso de forma gratuita.",
+    "short form": "Por qué es importante: Una cita abreviada (ej. 'Brown, 347 U.S. at 495') sólo se permite si ya escribió la cita completa previamente en su escrito.",
+    "subsequent history": "Por qué es importante: Si un tribunal superior modificó, revocó o confirmó el fallo, debe incluirse para asegurar que la decisión siga siendo derecho aplicable.",
+}
+
+HAINES_V_KERNER_NOTICE_EN = (
+    "PRO SE FILING LEGAL PROTECTION (Rule of Lenity / Haines v. Kerner):\n"
+    "\"A document filed pro se is 'to be liberally construed,' and 'a pro se complaint, "
+    "however inartfully pleaded, must be held to less stringent standards than formal pleadings "
+    "drafted by lawyers.'\"\n"
+    "-- Haines v. Kerner, 404 U.S. 519, 520 (1972); accord Erickson v. Pardus, 551 U.S. 89, 94 (2007)."
+)
+
+HAINES_V_KERNER_NOTICE_ES = (
+    "PROTECCIÓN LEGAL PARA LITIGANTES PRO SE (Doctrina Haines v. Kerner):\n"
+    "\"Un documento presentado por una persona que se representa a sí misma (pro se) debe ser "
+    "'interpretado con liberalidad', y 'una demanda pro se, por imperfectamente redactada que esté, "
+    "debe sujetarse a normas menos rigurosas que los escritos formales redactados por abogados'.\"\n"
+    "-- Haines v. Kerner, 404 U.S. 519, 520 (1972); conforme a Erickson v. Pardus, 551 U.S. 89, 94 (2007)."
+)
+
 RULE_SETS = {"app": "Fed. R. App. P.", "civ": "Fed. R. Civ. P.", "crim": "Fed. R. Crim. P.",
              "bankr": "Fed. R. Bankr. P.", "evid": "Fed. R. Evid."}
 
@@ -134,7 +291,11 @@ W = TOK + ",?"
 FIRST = LEAD + r"[\w.'’&\-]*,?"
 PIN = r"\d{1,5}(?:" + SPO + r"[-–—]" + SPO + r"\d{1,5})?"
 SIG = (r"(?:(?P<signal>(?i:see,?[ \t]e\.g\.,|see also|see generally|but see|but cf\.|see|cf\.|"
-       r"compare|accord|contra|e\.g\.,))" + SP + ")?")
+       r"compare|accord|contra|e\.g\.,|"
+       r"v[eé]ase,?[ \t]p\.?[ \t]?ej\.,?|"
+       r"v[eé]ase[ \t]+tambi[eé]n|vease[ \t]+tambien|v[eé]ase[ \t]+en[ \t]+general|vease[ \t]+en[ \t]+general|"
+       r"pero[ \t]+v[eé]ase|pero[ \t]+vease|pero[ \t]+cf\.|pero[ \t]+cfr\.|compare[ \t]+con|confr[oó]ntese[ \t]+con|"
+       r"v[eé]ase|vease|cfr\.|p\.?[ \t]?ej\.,?|por[ \t]+ejemplo,?))" + SP + ")?")
 
 CASE_RE = re.compile(
     r"(?<![\w])(?!(?:Ibid|Id)\b)" + SIG +
@@ -142,7 +303,7 @@ CASE_RE = re.compile(
     r"(?:" + SP + W + r"){0,8}?)"
     r"|(?P<inre>(?:In" + SP + r"re|Ex" + SP + r"parte)" + SP + W + r"(?:" + SP + W + r"){0,6}?))"
     r",?" + SP + r"(?P<vol>\d{1,4})" + SP + r"(?P<rep>" + REP + r")" + SP + r"(?P<page>\d{1,5})"
-    r"(?:(?:," + SPO + r"(?:at" + SP + r")?|" + SP + r"at" + SP + r")(?P<pin>" + PIN + r"))?"
+    r"(?:(?:," + SPO + r"(?:(?:at|p[aá]g\.?|p\.)" + SP + r")?|" + SP + r"(?:at|p[aá]g\.?|p\.)" + SP + r")(?P<pin>" + PIN + r"))?"
     r"(?:" + SPO + r"\((?P<paren>[^()\n]*)\))?"
     r"(?P<extra>(?:" + SPO + r"\([^()\n]*\))*)"
 )
@@ -150,21 +311,23 @@ CASE_RE = re.compile(
 SHORT_RE = re.compile(
     r"(?<![\w])" + SIG +
     r"(?P<name>" + FIRST.replace(",?", "") + r"(?:" + SP + TOK + r"){0,4}?)," + SP +
-    r"(?P<vol>\d{1,4})" + SP + r"(?P<rep>" + REP + r")" + SP + r"at" + SP + r"(?P<pin>" + PIN + r")"
+    r"(?P<vol>\d{1,4})" + SP + r"(?P<rep>" + REP + r")" + SP + r"(?:at|p[aá]g\.?|p\.)" + SP + r"(?P<pin>" + PIN + r")"
 )
 
 USC_RE = re.compile(
-    r"(?<![\w.])(?P<title>\d{1,2})" + SPO + r"U\.?[ \t]?S\.?[ \t]?C\.?(?P<a>A)?\.?" + SPO +
-    r"(?:§§?|sec\.?|section)?" + SPO +
+    r"(?<![\w.])(?P<title>\d{1,2})" + SPO + r"(?:U\.?[ \t]?S\.?[ \t]?C\.?(?P<a>A)?\.?|C[oó]d\.?[ \t]+(?:de[ \t]+)?EE\.?[ \t]?UU\.?)" + SPO +
+    r"(?:§§?|sec\.?|secci[oó]n|section)?" + SPO +
     r"(?P<sec>\d+[a-z]{0,2}(?:-\d+[a-z]?)?)(?P<sub>(?:\([A-Za-z0-9]+\))*)"
-    r"(?:" + SPO + r"\((?P<yr>(?:Supp\.[ \t]*[IVX]+[ \t]*)?\d{4})\))?"
+    r"(?:" + SPO + r"\((?P<yr>(?:Supp\.[ \t]*[IVX]+[ \t]*)?\d{4})\))?",
+    re.I
 )
 
 CFR_RE = re.compile(
     r"(?<![\w.])(?P<title>\d{1,3})" + SPO + r"C\.?[ \t]?F\.?[ \t]?R\.?" + SPO +
-    r"(?P<mark>§§?|pt\.?|part)?" + SPO +
+    r"(?P<mark>§§?|pt\.?|part|parte|secci[oó]n|sec\.?)?" + SPO +
     r"(?P<sec>\d+(?:\.\d+[a-z]?)?)(?P<sub>(?:\([A-Za-z0-9]+\))*)"
-    r"(?:" + SPO + r"\((?P<yr>\d{4})\))?"
+    r"(?:" + SPO + r"\((?P<yr>\d{4})\))?",
+    re.I
 )
 
 FEDREG_RE = re.compile(
@@ -178,19 +341,26 @@ RULE_RE = re.compile(
 )
 
 CONST_RE = re.compile(
-    r"(?<![\w.])U\.?[ \t]?S\.?[ \t]*Const(?:itution)?\.?,?" + SP +
-    r"(?P<kind>amend|art)\.?" + SP + r"(?P<num>[IVXLC]+|\d{1,2})"
-    r"(?:,?" + SPO + r"(?:§|sec\.?|section)" + SPO + r"(?P<sec>\d+))?"
-    r"(?:,?" + SPO + r"cl\.?" + SPO + r"(?P<cl>\d+))?"
+    r"(?<![\w.])(?:U\.?[ \t]?S\.?[ \t]*Const(?:itution)?\.?|"
+    r"Const(?:ituci[oó]n)?[ \t]+(?:de[ \t]+(?:los[ \t]+)?(?:EE\.?[ \t]?UU\.?|Estados[ \t]+Unidos)|EE\.?[ \t]?UU\.?)),?" + SP +
+    r"(?P<kind>amend|art|enmienda|art[ií]culo)\.?" + SP + r"(?P<num>[IVXLC]+|\d{1,2})"
+    r"(?:,?" + SPO + r"(?:§|sec\.?|secci[oó]n|section)" + SPO + r"(?P<sec>\d+))?"
+    r"(?:,?" + SPO + r"(?:cl\.?|cl[aá]usula)" + SPO + r"(?P<cl>\d+))?",
+    re.I
 )
 
 ID_RE = re.compile(
-    r"(?<![\w.])(?P<id>Ibid\.?|[Ii]d\.|[Ii]d(?=[ \t]+at[ \t]+\d))"
-    r"(?:" + SPO + r",?" + SPO + r"at" + SP + r"(?P<pin>" + PIN + r"))?"
+    r"(?<![\w.])(?P<id>Ibid\.?|[Ii]d\.|[Ii]d(?=[ \t]+(?:at|p[aá]g\.?|p\.)[ \t]+\d))"
+    r"(?:" + SPO + r",?" + SPO + r"(?:at|p[aá]g\.?|p\.)" + SP + r"(?P<pin>" + PIN + r"))?"
 )
 WL_RE = re.compile(r"\b\d{4}[ \t]+(?:WL|U\.S\.[ \t]+(?:Dist|App)\.[ \t]+LEXIS)[ \t]+\d+")
 SUPRA_RE = re.compile(r"\b[Ss]upra\b")
-RECORD_RE = re.compile(r"\b(?:R\.|JA|ER|SER|Dkt\.|ECF[ \t]No\.)" + SPO + r"(?:at" + SPO + r")?\d+")
+RECORD_RE = re.compile(
+    r"\b(?:(?:R\.|JA|ER|SER|PageID)[ \t]*(?:at[ \t]*)?\d+"
+    r"|(?:ECF|Doc\.|Document|Dkt\.|Docket|Expediente)[ \t]*(?:No\.|Núm\.|Num\.)?[ \t]*(?:at[ \t]*)?\d+(?:[ \t]*,?[ \t]*(?:at|pág\.|pag\.|p\.)[ \t]*\d+)?"
+    r"|(?:Ex\.|Exhibit)[ \t]+[A-Za-z0-9]+(?:[ \t]*,?[ \t]*(?:at|pág\.|pag\.|p\.)[ \t]*\d+)?)",
+    re.I
+)
 
 CIRCUIT_RE = re.compile(
     r"^(?:(?P<n>\d{1,2})[ \t]?(?:st|nd|rd|th|d)?[ \t]*Cir\.?|(?P<dc>D\.?[ \t]?C\.?)[ \t]*Cir\.?"
@@ -213,6 +383,8 @@ class Citation:
     line: int = 0
     category: str = ""
     toa: str | None = None
+    free_link: str | None = None
+    pronunciation: str | None = None
 
     def raise_to(self, level: str, msg: str | None = None) -> None:
         if _RANK[level] > _RANK[self.status]:
@@ -225,8 +397,30 @@ class Citation:
 
 
 # --------------------------------------------------------------------------
-# Helpers
+# Helpers & Translations
 # --------------------------------------------------------------------------
+def translate_note(note_str: str) -> str:
+    level = ""
+    for p in ("ERROR: ", "WARN: ", "NOTE: "):
+        if note_str.startswith(p):
+            level = {"ERROR: ": "ERROR: ", "WARN: ": "ADVERTENCIA: ", "NOTE: ": "NOTA: "}[p]
+            note_str = note_str[len(p):]
+            break
+    for k, v in ES_TRANSLATIONS.items():
+        if k.lower() in note_str.lower():
+            return f"{level}{v}"
+    return f"{level}{note_str}"
+
+
+def get_pro_se_explanation(note_str: str, lang: str = "en") -> str | None:
+    for k, v in PRO_SE_EXPLANATIONS.items():
+        if k.lower() in note_str.lower():
+            if lang == "es":
+                return PRO_SE_EXPLANATIONS_ES.get(k, v)
+            return v
+    return None
+
+
 def fix_pin(p: str | None) -> str | None:
     """Rule 3.2(a): retain at least two digits when collapsing page ranges."""
     if not p:
@@ -252,7 +446,10 @@ def norm_signal(sig: str | None) -> str | None:
     if not sig:
         return None
     s = re.sub(r"\s+", " ", sig.strip().lower()).replace("see e.g.,", "see, e.g.,")
-    canon = SIGNALS.get(s, sig.strip())
+    if s in SPANISH_SIGNALS:
+        canon = SPANISH_SIGNALS[s]
+    else:
+        canon = SIGNALS.get(s, sig.strip())
     if sig.strip()[0].islower():
         canon = canon[0].lower() + canon[1:]
     return canon
@@ -342,17 +539,125 @@ def to_roman(n: int) -> str:
 
 
 # --------------------------------------------------------------------------
+# Free Research Links & Pronunciation Guides (A2J & A11y)
+# --------------------------------------------------------------------------
+def get_free_link(c: Citation) -> str | None:
+    """Generate free, zero-cost public research URLs (CourtListener, Cornell LII, Federal Register)."""
+    raw = plain(c.formatted or c.original)
+    if c.kind in ("case", "short"):
+        m = re.search(r"(\d+)\s+([A-Za-z0-9.\s']+?)\s+(?:at\s+)?(\d+)", raw)
+        if m:
+            vol, rep, page = m.group(1), m.group(2).strip(), m.group(3)
+            if rep == "U.S.":
+                return f"https://www.courtlistener.com/c/U.S./{vol}/{page}/"
+            query = quote_plus(f"{vol} {rep} {page}")
+            return f"https://www.courtlistener.com/?q={query}&type=o"
+    elif c.kind == "usc":
+        m = re.search(r"(\d+)\s+U\.S\.C\.\s+§\s+([\d\w]+)", raw)
+        if m:
+            return f"https://www.law.cornell.edu/uscode/text/{m.group(1)}/{m.group(2)}"
+    elif c.kind == "cfr":
+        m = re.search(r"(\d+)\s+C\.F\.R\.\s+(?:§|pt\.)\s+([\d\.]+)", raw)
+        if m:
+            return f"https://www.law.cornell.edu/cfr/text/{m.group(1)}/{m.group(2)}"
+    elif c.kind == "fedreg":
+        m = re.search(r"(\d+)\s+Fed\.\s+Reg\.\s+(\d+)", raw)
+        if m:
+            return f"https://www.federalregister.gov/documents/search?conditions[term]={m.group(1)}+FR+{m.group(2)}"
+    elif c.kind == "const":
+        m = re.search(r"U\.S\.\s+Const\.\s+(amend\.|art\.)\s+([IVXLC\d]+)", raw)
+        if m:
+            kind_str = "amendment" if "amend" in m.group(1) else "article"
+            return f"https://www.law.cornell.edu/constitution/{kind_str}_{m.group(2).lower()}"
+    elif c.kind == "rule":
+        m = re.search(r"Fed\.\s+R\.\s+(Civ|App|Crim|Evid)\.\s+P\.\s+(\d+)", raw)
+        if m:
+            cat = {"Civ": "frcp", "App": "frap", "Crim": "frcrmp", "Evid": "fre"}.get(m.group(1), "frcp")
+            return f"https://www.law.cornell.edu/rules/{cat}/rule_{m.group(2)}"
+    return None
+
+
+def pronounce_citation(c: Citation) -> str:
+    """Generate plain-English spoken pronunciation guide for oral arguments, screen-readers, and TTS."""
+    raw = plain(c.formatted or c.original)
+    if c.kind in ("case", "short"):
+        m = re.match(
+            r"^(?P<name>.*?),\s+(?P<vol>\d+)\s+(?P<rep>.*?)\s+(?:at\s+)?(?P<page>\d+)(?:,\s+(?P<pin>\d+(?:[–-]\d+)?))?(?:\s+\((?P<paren>.*?)\))?",
+            raw
+        )
+        if m:
+            name = m.group("name").replace(" v. ", " versus ")
+            vol = m.group("vol")
+            rep = m.group("rep").strip()
+            page = m.group("page")
+            pin = m.group("pin")
+            paren = m.group("paren") or ""
+            rep_sp = REPORTER_SPOKEN.get(rep, rep)
+            parts = [f"{name}, Volume {vol}, {rep_sp}, page {page}"]
+            if pin:
+                if "–" in pin or "-" in pin:
+                    p1, p2 = re.split(r"[–-]", pin)
+                    parts.append(f"at pages {p1} through {p2}")
+                else:
+                    parts.append(f"at page {pin}")
+            if paren:
+                yr_match = re.search(r"(\d{4})", paren)
+                yr = yr_match.group(1) if yr_match else paren
+                court_part = paren[:yr_match.start()].strip() if yr_match else ""
+                court_sp = COURT_SPOKEN.get(court_part, court_part)
+                if court_sp:
+                    parts.append(f"decided by the {court_sp} in {yr}")
+                else:
+                    parts.append(f"decided in {yr}")
+            return ", ".join(parts) + "."
+    elif c.kind == "usc":
+        m = re.match(r"^(\d+)\s+U\.S\.C\.\s+§\s+([\d\w\-]+(?:\([A-Za-z0-9]+\))*)", raw)
+        if m:
+            return f"Title {m.group(1)}, United States Code, Section {m.group(2)}."
+    elif c.kind == "cfr":
+        m = re.match(r"^(\d+)\s+C\.F\.R\.\s+(?:§|pt\.)\s+([\d\.\w\-]+(?:\([A-Za-z0-9]+\))*)", raw)
+        if m:
+            return f"Title {m.group(1)}, Code of Federal Regulations, Section {m.group(2)}."
+    elif c.kind == "fedreg":
+        m = re.match(r"^(\d+)\s+Fed\.\s+Reg\.\s+(\d+)", raw)
+        if m:
+            return f"Volume {m.group(1)}, Federal Register, page {m.group(2)}."
+    elif c.kind == "const":
+        m = re.match(r"^U\.S\.\s+Const\.\s+(amend\.|art\.)\s+([IVXLC\d]+)(?:,\s+§\s+(\d+))?(?:,\s+cl\.\s+(\d+))?", raw)
+        if m:
+            kind_word = "Amendment" if "amend" in m.group(1) else "Article"
+            num = m.group(2)
+            word = ROMAN_NUMS.get(num, num)
+            res = f"United States Constitution, {kind_word} {num} ({word})"
+            if m.group(3):
+                res += f", Section {m.group(3)}"
+            if m.group(4):
+                res += f", Clause {m.group(4)}"
+            return res + "."
+    elif c.kind == "rule":
+        return f"{raw}."
+    elif c.kind == "record":
+        return f"Court record reference: {raw}."
+    return f"{raw}."
+
+
+# --------------------------------------------------------------------------
 # Builders -- each returns a Citation (span, formatted, status, notes)
 # --------------------------------------------------------------------------
 def build_case(m: re.Match, text: str) -> Citation:
     notes_cleanup: list[str] = []
-    sig = norm_signal(m.group("signal"))
+    sig_raw = m.group("signal")
+    sig = norm_signal(sig_raw)
     raw_name = m.group("name") or m.group("inre")
     lead, raw_name = ("", raw_name) if m.group("inre") else strip_leadin(raw_name, bool(sig))
     start = m.start("signal") if sig else m.start("name") if m.group("name") else m.start("inre")
     start += len(lead)
     c = Citation("case", start, m.end(), text[start:m.end()], category="Cases")
     name = clean_case_name(raw_name, notes_cleanup)
+    if sig_raw and sig_raw.strip().lower() in SPANISH_SIGNALS:
+        notes_cleanup.append("Translated Spanish legal signal to Bluebook standard")
+    if m.group("pin") and any(p in text[m.start():m.end()].lower() for p in ("pág", "pag.")):
+        notes_cleanup.append("Normalized Spanish page indicator ('pág.') to standard comma pinpoint")
     for n in notes_cleanup:
         c.raise_to(WARN, n)
 
@@ -424,16 +729,21 @@ def build_case(m: re.Match, text: str) -> Citation:
 
 
 def build_short(m: re.Match, text: str) -> Citation:
-    sig = norm_signal(m.group("signal"))
+    sig_raw = m.group("signal")
+    sig = norm_signal(sig_raw)
     lead, raw = strip_leadin(m.group("name"), bool(sig))
     start = (m.start("signal") if sig else m.start("name")) + len(lead)
     c = Citation("short", start, m.end(), text[start:m.end()], category="")
     notes: list[str] = []
     name = _clean_party(raw, notes)
+    if sig_raw and sig_raw.strip().lower() in SPANISH_SIGNALS:
+        notes.append("Translated Spanish legal signal to Bluebook standard")
     rep = REPORTER_BY_KEY[_key(m.group("rep"))]
     c.formatted = (it(sig) + " " if sig else "") + \
         f"{it(name)}, {m.group('vol')} {rep} at {fix_pin(m.group('pin'))}"
     c.note("short form; confirm a matching full citation appears earlier in the brief")
+    for n in notes:
+        c.raise_to(WARN, n)
     return c
 
 
@@ -441,6 +751,9 @@ def build_usc(m: re.Match, text: str) -> Citation:
     c = Citation("usc", m.start(), m.end(), m.group(0), category="Statutes")
     f = f"{m.group('title')} U.S.C. § {m.group('sec')}{m.group('sub')}"
     c.toa = f"{m.group('title')} U.S.C. § {m.group('sec')}"
+    raw_lower = m.group(0).lower()
+    if any(w in raw_lower for w in ("cód", "cod.", "código")):
+        c.note("Normalized Spanish statutory citation to standard U.S.C.")
     if m.group("a"):
         c.raise_to(WARN, "cite U.S.C., not U.S.C.A./U.S.C.S., unless unofficial code is required (Rule 12.3)")
     if m.group("yr"):
@@ -458,7 +771,7 @@ def build_usc(m: re.Match, text: str) -> Citation:
 def build_cfr(m: re.Match, text: str) -> Citation:
     c = Citation("cfr", m.start(), m.end(), m.group(0), category="Regulations")
     mark = (m.group("mark") or "").lower()
-    part = mark.startswith("pt") or mark == "part"
+    part = mark.startswith("pt") or mark.startswith("part") or mark.startswith("parte")
     pre = "pt." if part else "§"
     f = f"{m.group('title')} C.F.R. {pre} {m.group('sec')}{m.group('sub')}"
     c.toa = f"{m.group('title')} C.F.R. {pre} {m.group('sec')}"
@@ -500,7 +813,9 @@ def build_const(m: re.Match, text: str) -> Citation:
     num = m.group("num")
     if num.isdigit():
         num = to_roman(int(num))
-    kind = "amend." if m.group("kind") == "amend" else "art."
+    kind_raw = m.group("kind").lower()
+    is_spanish = any(w in m.group(0).lower() for w in ("constitución", "constitucion", "ee.uu", "enmienda", "artículo", "articulo", "cláusula", "clausula"))
+    kind = "amend." if kind_raw.startswith("amend") or kind_raw.startswith("enmienda") else "art."
     f = f"U.S. Const. {kind} {num}"
     toa = f
     if m.group("sec"):
@@ -509,6 +824,8 @@ def build_const(m: re.Match, text: str) -> Citation:
     if m.group("cl"):
         f += f", cl. {m.group('cl')}"
     c.formatted, c.toa = f, toa
+    if is_spanish:
+        c.note("Normalized Spanish constitutional reference to standard Bluebook citation")
     return c
 
 
@@ -518,6 +835,21 @@ def build_id(m: re.Match, text: str) -> Citation:
         c.raise_to(ERROR, "'Ibid.' is not Bluebook form; use 'Id.' (Rule 4.1)")
         return c
     c.formatted = it("Id.") + (f" at {fix_pin(m.group('pin'))}" if m.group("pin") else "")
+    return c
+
+
+def build_record(m: re.Match, text: str) -> Citation:
+    c = Citation("record", m.start(), m.end(), m.group(0))
+    raw = m.group(0).strip()
+    m_ecf = re.match(r"(?i)^(ecf|doc|dkt|docket)\.?\s*(?:no\.|núm\.|num\.)?\s*(\d+)(?:,?\s*(?:at|pág\.|pag\.|p\.)\s*(\d+))?$", raw)
+    if m_ecf:
+        prefix = "ECF No." if m_ecf.group(1).lower() in ("ecf",) else "Doc." if m_ecf.group(1).lower() in ("doc", "document") else "Dkt."
+        num = m_ecf.group(2)
+        pin = m_ecf.group(3)
+        formatted = f"{prefix} {num}" + (f", at {pin}" if pin else "")
+        if formatted != raw:
+            c.formatted = formatted
+    c.note("pro se court docket reference; standardized format")
     return c
 
 
@@ -545,9 +877,7 @@ def find_citations(text: str) -> list[Citation]:
                          "use a short form or 'Id.'; left unchanged")
         found.append(c)
     for m in RECORD_RE.finditer(text):
-        c = Citation("record", m.start(), m.end(), m.group(0))
-        c.note("record cite; style is governed by the court's local rules; left unchanged")
-        found.append(c)
+        found.append(build_record(m, text))
 
     # resolve overlaps: earliest start wins, then longest
     found.sort(key=lambda c: (c.start, -(c.end - c.start)))
@@ -561,6 +891,8 @@ def find_citations(text: str) -> list[Citation]:
         c.line = text.count("\n", 0, c.start) + 1
         if c.formatted is not None and plain(c.formatted) != c.original and c.status == OK:
             c.status = FIXED
+        c.free_link = get_free_link(c)
+        c.pronunciation = pronounce_citation(c)
     return kept
 
 
@@ -606,45 +938,176 @@ def analyze(text: str, style: str = "markdown", unwrap: bool = False) -> Result:
     return Result("".join(out), cites)
 
 
-def build_toa(cites: list[Citation], style: str) -> str:
+def build_toa(cites: list[Citation], style: str, lang: str = "en") -> str:
+    is_es = lang == "es"
     groups: dict[str, set[str]] = {}
     for c in cites:
         if c.toa and c.category:
             groups.setdefault(c.category, set()).add(c.toa)
     order = ["Cases", "Constitutional Provisions", "Statutes", "Regulations", "Rules",
              "Other Authorities"]
-    lines = ["TABLE OF AUTHORITIES", "(page references must be added after final pagination)", ""]
+    cat_names = {
+        "Cases": "CASOS" if is_es else "CASES",
+        "Constitutional Provisions": "DISPOSICIONES CONSTITUCIONALES" if is_es else "CONSTITUTIONAL PROVISIONS",
+        "Statutes": "ESTATUTOS" if is_es else "STATUTES",
+        "Regulations": "REGLAMENTOS" if is_es else "REGULATIONS",
+        "Rules": "REGLAS PROCESALES" if is_es else "RULES",
+        "Other Authorities": "OTRAS AUTORIDADES" if is_es else "OTHER AUTHORITIES",
+    }
+    title = "TABLA DE AUTORIDADES" if is_es else "TABLE OF AUTHORITIES"
+    subtitle = ("(las referencias de página deben agregarse tras la paginación final)"
+                if is_es else "(page references must be added after final pagination)")
+    lines = [title, subtitle, ""]
     for cat in order:
         if cat in groups:
-            lines.append(cat.upper())
+            lines.append(cat_names.get(cat, cat.upper()))
             for e in sorted(groups[cat], key=lambda s: plain(s).lower()):
                 lines.append("  " + render(e, style))
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
-def build_report(cites: list[Citation]) -> str:
+def build_report(
+    cites: list[Citation],
+    lang: str = "en",
+    pro_se: bool = False,
+    a11y: bool = False,
+    pronounce: bool = False,
+    links: bool = False,
+) -> str:
+    is_es = lang == "es"
     counts = {k: 0 for k in (OK, FIXED, WARN, ERROR)}
     for c in cites:
         counts[c.status] += 1
-    lines = ["BLUEBOOK BUDDY REPORT", "=" * 60,
-             f"{len(cites)} items | OK {counts[OK]} | FIXED {counts[FIXED]} | "
-             f"WARN {counts[WARN]} | ERROR {counts[ERROR]}", ""]
+
+    status_names = {
+        OK: "CORRECTO" if is_es else OK,
+        FIXED: "CORREGIDO" if is_es else FIXED,
+        WARN: "ADVERTENCIA" if is_es else WARN,
+        ERROR: "ERROR" if is_es else ERROR,
+    }
+
+    if a11y:
+        # Screen-reader / assistive technology optimized structure (semantic headings, no decorative ASCII art)
+        title = "# Informe de Accesibilidad de BlueBook Buddy" if is_es else "# BlueBook Buddy Accessibility Report"
+        lines = [title, ""]
+        lines.append("## " + ("Resumen Ejecutivo" if is_es else "Executive Summary"))
+        lines.append(f"- {'Total de autoridades analizadas' if is_es else 'Total authorities analyzed'}: {len(cites)}")
+        lines.append(f"- {status_names[OK]}: {counts[OK]}")
+        lines.append(f"- {status_names[FIXED]}: {counts[FIXED]}")
+        lines.append(f"- {status_names[WARN]}: {counts[WARN]}")
+        lines.append(f"- {status_names[ERROR]}: {counts[ERROR]}")
+        lines.append("")
+
+        if counts[ERROR]:
+            verdict_str = ("FALLO (Existen errores que deben corregirse antes de la presentación)"
+                           if is_es else "FAIL (Errors must be resolved before court filing)")
+        elif counts[WARN]:
+            verdict_str = ("APROBADO CON ADVERTENCIAS (Revise las observaciones manualmente)"
+                           if is_es else "PASS WITH WARNINGS (Review items manually)")
+        else:
+            verdict_str = ("APROBADO (Todas las citas cumplen con las normas Bluebook)"
+                           if is_es else "PASS (All citations adhere to Bluebook standards)")
+        lines.append(f"**{'Veredicto' if is_es else 'Verdict'}:** {verdict_str}")
+        lines.append("")
+
+        lines.append("## " + ("Detalle de Citas Analizadas" if is_es else "Detailed Citation Analysis"))
+        for i, c in enumerate(cites, 1):
+            lines.append(f"### {'Cita' if is_es else 'Citation'} {i}: {'Línea' if is_es else 'Line'} {c.line} ({c.kind})")
+            lines.append(f"- **{'Texto original' if is_es else 'Original'}**: `{c.original}`")
+            if c.formatted is not None and plain(c.formatted) != c.original:
+                lines.append(f"- **{'Texto corregido' if is_es else 'Formatted'}**: `{plain(c.formatted)}`")
+            lines.append(f"- **{'Estado' if is_es else 'Status'}**: {status_names[c.status]}")
+
+            if (pronounce or a11y) and c.pronunciation:
+                lines.append(f"- **{'Pronunciación sugerida / Lectura oral' if is_es else 'Spoken Read-Aloud Guide'}**: {c.pronunciation}")
+
+            if (links or pro_se or a11y) and c.free_link:
+                lines.append(f"- **{'Enlace de acceso público gratuito' if is_es else 'Free Public Access Link'}**: {c.free_link}")
+
+            if c.notes:
+                lines.append(f"- **{'Observaciones' if is_es else 'Notes'}**:")
+                for n in c.notes:
+                    note_disp = translate_note(n) if is_es else n
+                    lines.append(f"  - {note_disp}")
+                    if pro_se or a11y:
+                        expl = get_pro_se_explanation(n, lang=lang)
+                        if expl:
+                            lines.append(f"    * {expl}")
+            lines.append("")
+
+        if pro_se or a11y:
+            lines.append("## " + ("Protección Legal para Litigantes Pro Se" if is_es else "Legal Notice for Pro Se Filers"))
+            lines.append(HAINES_V_KERNER_NOTICE_ES if is_es else HAINES_V_KERNER_NOTICE_EN)
+            lines.append("")
+
+        lines.append("## " + ("Recordatorio de Verificación" if is_es else "Verification Reminder"))
+        reminder = (
+            "Esta herramienta evalúa la forma y el formato, no la vigencia ni el fondo sustantivo. "
+            "Verifique la existencia, el número de página específico y el historial procesal antes de presentar su documento ante el tribunal."
+            if is_es else
+            "This tool evaluates citation form, not judicial substance. Always verify existence, "
+            "pinpoint accuracy, and subsequent history before submitting documents to court."
+        )
+        lines.append(reminder)
+        return "\n".join(lines)
+
+    # Standard terminal / plain-text report
+    header_title = "INFORME DE BLUEBOOK BUDDY" if is_es else "BLUEBOOK BUDDY REPORT"
+    item_str = "elementos" if is_es else "items"
+    lines = [
+        header_title,
+        "=" * 60,
+        f"{len(cites)} {item_str} | {status_names[OK]} {counts[OK]} | {status_names[FIXED]} {counts[FIXED]} | "
+        f"{status_names[WARN]} {counts[WARN]} | {status_names[ERROR]} {counts[ERROR]}",
+        "",
+    ]
     for c in cites:
-        if c.status == OK and not c.notes:
+        if c.status == OK and not c.notes and not (pro_se or links or pronounce):
             continue
-        lines.append(f"[{c.status}] line {c.line} ({c.kind})")
+        line_word = "línea" if is_es else "line"
+        lines.append(f"[{status_names[c.status]}] {line_word} {c.line} ({c.kind})")
         lines.append(f"    in : {c.original}")
         if c.formatted is not None and plain(c.formatted) != c.original:
             lines.append(f"    out: {plain(c.formatted)}")
+        if (pronounce or pro_se) and c.pronunciation:
+            lbl = "hablado: " if is_es else "spoken: "
+            lines.append(f"    {lbl}{c.pronunciation}")
+        if (links or pro_se) and c.free_link:
+            lbl = "gratis : " if is_es else "free   : "
+            lines.append(f"    {lbl}{c.free_link}")
         for n in c.notes:
-            lines.append(f"    - {n}")
+            note_disp = translate_note(n) if is_es else n
+            lines.append(f"    - {note_disp}")
+            if pro_se:
+                expl = get_pro_se_explanation(n, lang=lang)
+                if expl:
+                    lines.append(f"      [{expl}]")
+
     lines.append("")
-    lines.append("Verdict: " + ("FAIL (errors must be resolved)" if counts[ERROR]
-                               else "PASS WITH WARNINGS (resolve manually)" if counts[WARN]
-                               else "PASS"))
-    lines.append("Reminder: this tool checks form, not substance. Cite-check every authority "
-                 "(existence, pincite accuracy, subsequent history) before filing.")
+    verdict_lbl = "Veredicto: " if is_es else "Verdict: "
+    if counts[ERROR]:
+        v_msg = "FALLO (los errores deben resolverse antes de presentar)" if is_es else "FAIL (errors must be resolved)"
+    elif counts[WARN]:
+        v_msg = "APROBADO CON ADVERTENCIAS (revisar manualmente)" if is_es else "PASS WITH WARNINGS (resolve manually)"
+    else:
+        v_msg = "APROBADO" if is_es else "PASS"
+    lines.append(f"{verdict_lbl}{v_msg}")
+
+    if pro_se:
+        lines.append("")
+        lines.append("-" * 60)
+        lines.append(HAINES_V_KERNER_NOTICE_ES if is_es else HAINES_V_KERNER_NOTICE_EN)
+
+    lines.append("")
+    reminder = (
+        "Recordatorio: Esta herramienta verifica la forma, no el fondo. Verifique cada autoridad "
+        "(existencia, precisión de la página específica, historial procesal posterior) antes de presentar su escrito."
+        if is_es else
+        "Reminder: this tool checks form, not substance. Cite-check every authority "
+        "(existence, pincite accuracy, subsequent history) before filing."
+    )
+    lines.append(reminder)
     return "\n".join(lines)
 
 
@@ -658,6 +1121,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="emit JSON instead of text")
     ap.add_argument("--unwrap", action="store_true", help="join hard-wrapped lines before parsing")
     ap.add_argument("--strict", action="store_true", help="fail (exit 1) on warnings too")
+    ap.add_argument("--pro-se", "--low-income", dest="pro_se", action="store_true",
+                    help="pro se / in forma pauperis mode: includes free research links (CourtListener/LII), plain-English explanations, and Haines v. Kerner notice")
+    ap.add_argument("--links", "--free-links", dest="links", action="store_true",
+                    help="include direct free public legal research links (CourtListener, Cornell LII) for all authorities")
+    ap.add_argument("--lang", choices=["en", "es"], default="en",
+                    help="report language: 'en' for English, 'es' for Spanish (Español)")
+    ap.add_argument("--a11y", "--screen-reader", dest="a11y", action="store_true",
+                    help="accessibility mode: screen-reader optimized headings, no repetitive ASCII dividers, structured semantics")
+    ap.add_argument("--pronounce", "--speak", dest="pronounce", action="store_true",
+                    help="include spoken/read-aloud phonetic pronunciation guide for oral arguments and screen readers")
     a = ap.parse_args(argv)
 
     raw = sys.stdin.read() if a.input == "-" else open(a.input, encoding="utf-8").read()
@@ -668,15 +1141,25 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps([{
             "kind": c.kind, "line": c.line, "status": c.status, "original": c.original,
             "formatted": plain(c.formatted) if c.formatted is not None else None,
-            "notes": c.notes} for c in res.citations], indent=2, ensure_ascii=False))
+            "notes": c.notes,
+            "free_link": c.free_link,
+            "pronunciation": c.pronunciation,
+        } for c in res.citations], indent=2, ensure_ascii=False))
     else:
-        body = res.text + ("\n\n" + build_toa(res.citations, a.style) if a.toa else "")
+        body = res.text + ("\n\n" + build_toa(res.citations, a.style, a.lang) if a.toa else "")
         if a.output:
             with open(a.output, "w", encoding="utf-8") as fh:
                 fh.write(body)
         else:
             print(body)
-        print(build_report(res.citations), file=sys.stderr)
+        print(build_report(
+            res.citations,
+            lang=a.lang,
+            pro_se=a.pro_se,
+            a11y=a.a11y,
+            pronounce=a.pronounce,
+            links=a.links,
+        ), file=sys.stderr)
     return 1 if worst >= _RANK[ERROR] or (a.strict and worst >= _RANK[WARN]) else 0
 
 
